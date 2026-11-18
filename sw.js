@@ -1,4 +1,4 @@
-var CACHE = 'people-v2';
+var CACHE = 'people-v4';
 var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', function (e) {
@@ -19,7 +19,7 @@ self.addEventListener('fetch', function (e) {
   if (u.origin !== location.origin) return;
   e.respondWith(
     caches.match(e.request).then(function (hit) {
-      var net = fetch(e.request).then(function (r) {
+      var net = fetch(e.request, { cache: 'no-cache' }).then(function (r) {
         if (r && r.ok) { var cp = r.clone(); caches.open(CACHE).then(function (c) { c.put(e.request, cp); }); }
         return r;
       }).catch(function () { return hit || caches.match('index.html'); });

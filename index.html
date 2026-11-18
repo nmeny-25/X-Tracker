@@ -32,13 +32,15 @@ button.danger{color:var(--danger)}
 .row{display:flex;gap:8px}.row>*{flex:1}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{height:38px;border-radius:999px;padding:0 14px;font-size:15px}
-.chip.on{background:var(--accent-bg);color:var(--accent);border-color:var(--accent)}
+.chip.on,.rb.on{background:var(--accent-bg);color:var(--accent);border-color:var(--accent)}
+.rate{display:grid;grid-template-columns:repeat(10,1fr);gap:4px}
+.rb{height:42px;padding:0;border-radius:8px;font-size:14px}
 .hint{font-size:13px;color:var(--muted)}
 .err{font-size:13px;color:var(--danger);margin-top:6px;min-height:18px}
 .badge{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;border-radius:9px;background:var(--accent);color:var(--on-accent);font-size:12px;line-height:18px;text-align:center}
 .item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:8px;cursor:pointer}
 .item b{font-weight:600}.item .sub{font-size:13px;color:var(--muted)}
-.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
 .card .n{font-size:24px;font-weight:600}.card .t{font-size:12px;color:var(--muted)}
 h2{font-size:15px;font-weight:600;margin:20px 0 8px}
@@ -81,6 +83,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="chips" id="nat-chips" style="margin-bottom:8px"></div>
     <input id="f-nat" list="nat-list" autocomplete="off" autocapitalize="words" placeholder="Type or tap above">
     <datalist id="nat-list"></datalist>
+    <div class="lbl">Rating (1 to 10, tap again to clear)</div>
+    <div class="rate" id="rate"></div>
     <label for="f-notes">Notes</label>
     <textarea id="f-notes" placeholder="Optional"></textarea>
     <div class="err" id="f-err"></div>
@@ -108,10 +112,13 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       <div class="card"><div class="n" id="s-people">0</div><div class="t">People</div></div>
       <div class="card"><div class="n" id="s-nat">0</div><div class="t">Nationalities</div></div>
       <div class="card"><div class="n" id="s-int">0</div><div class="t">Interactions</div></div>
+      <div class="card"><div class="n" id="s-rate">–</div><div class="t">Average rating</div></div>
     </div>
     <h2>People by nationality</h2><div class="bars" id="s-nat-bars"></div>
     <h2>People by interaction</h2><div class="bars" id="s-int-bars"></div>
     <h2>Most interactions</h2><div class="bars" id="s-top"></div>
+    <h2>People by rating</h2><div class="bars" id="s-rate-bars"></div>
+    <h2>Average rating by nationality</h2><div class="bars" id="s-rate-nat"></div>
     <p class="hint" style="margin-top:20px">Figures use the data on this device as of the last sync, plus anything you added since.</p>
   </section>
 </main>
@@ -130,6 +137,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   <input id="set-key" type="password" autocomplete="off">
   <p class="hint">Both stay on this device. Sync only runs when you tap Sync.</p>
   <div class="row"><button class="primary" id="set-save">Save</button><button id="set-export">Export CSV</button><button id="set-close">Close</button></div>
+  <div class="row" style="margin-top:8px"><button id="set-refresh">Refresh app</button></div>
+  <p class="hint" id="ver" style="margin-bottom:0"></p>
 </dialog>
 <div id="toast" role="status"></div>
 
@@ -139,7 +148,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   var KEY = 'pt_v1';
   var NATS = ['German','French','Spanish','Italian','British','American','Dutch','Belgian','Swiss','Austrian','Portuguese','Polish','Swedish','Norwegian','Danish','Finnish','Irish','Greek','Turkish','Romanian','Bulgarian','Czech','Hungarian','Croatian','Serbian','Ukrainian','Russian','Canadian','Mexican','Brazilian','Argentine','Colombian','Chilean','Peruvian','Indian','Pakistani','Chinese','Japanese','Korean','Vietnamese','Thai','Indonesian','Filipino','Australian','New Zealander','South African','Nigerian','Egyptian','Moroccan','Tunisian','Lebanese','Israeli','Iranian','Saudi','Emirati','Algerian','Kenyan','Ghanaian','Lithuanian','Latvian','Estonian','Slovak','Slovenian'];
   var S = { people: {}, dirty: [], types: [], settings: { url: '', key: '' }, lastSync: 0 };
-  var F = { id: null, ints: [] };
+  var F = { id: null, ints: [], rating: '' };
   var shown = 100;
 
   function $(id) { return document.getElementById(id); }
@@ -198,10 +207,13 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     countBy(function (p) { return [p.nat]; }).forEach(function (x) { names[x[0]] = 1; });
     NATS.forEach(function (n) { names[n] = 1; });
     $('nat-list').innerHTML = Object.keys(names).map(function (n) { return '<option value="' + esc(n) + '">'; }).join('');
+    var rb = '';
+    for (var n = 1; n <= 10; n++) rb += '<button type="button" class="rb' + (F.rating === n ? ' on' : '') + '" data-rate="' + n + '" aria-label="Rating ' + n + '">' + n + '</button>';
+    $('rate').innerHTML = rb;
   }
 
   function resetForm() {
-    F = { id: null, ints: [] };
+    F = { id: null, ints: [], rating: '' };
     ['f-first', 'f-last', 'f-how', 'f-nat', 'f-notes'].forEach(function (i) { $(i).value = ''; });
     $('f-err').textContent = '';
     $('form-title').textContent = 'Add person';
@@ -212,14 +224,14 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   function readForm() {
     var first = $('f-first').value.trim(), last = $('f-last').value.trim();
     if (!first && !last) { $('f-err').textContent = 'Enter a first or last name'; $('f-first').focus(); return null; }
-    return { first: first, last: last, how: $('f-how').value.trim(), nat: canonNat($('f-nat').value), notes: $('f-notes').value.trim(), ints: F.ints.slice() };
+    return { first: first, last: last, how: $('f-how').value.trim(), nat: canonNat($('f-nat').value), notes: $('f-notes').value.trim(), rating: F.rating, ints: F.ints.slice() };
   }
   function markDirty(id) { if (S.dirty.indexOf(id) < 0) S.dirty.push(id); }
 
   function addPerson() {
     var v = readForm(); if (!v) return;
     var now = Date.now(), id = uid();
-    S.people[id] = { id: id, first: v.first, last: v.last, nat: v.nat, how: v.how, notes: v.notes, ints: v.ints, created: now, updated: now, deleted: false };
+    S.people[id] = { id: id, first: v.first, last: v.last, nat: v.nat, how: v.how, notes: v.notes, rating: v.rating, ints: v.ints, created: now, updated: now, deleted: false };
     markDirty(id); save();
     toast('Saved ' + fullName(S.people[id]) + '. ' + S.dirty.length + ' waiting to sync.');
     resetForm(); renderStatus(); $('f-first').focus();
@@ -227,7 +239,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   function updatePerson() {
     var v = readForm(); if (!v) return;
     var p = S.people[F.id]; if (!p) { resetForm(); return; }
-    p.first = v.first; p.last = v.last; p.how = v.how; p.nat = v.nat; p.notes = v.notes; p.ints = v.ints; p.updated = Date.now();
+    p.first = v.first; p.last = v.last; p.how = v.how; p.nat = v.nat; p.notes = v.notes; p.rating = v.rating; p.ints = v.ints; p.updated = Date.now();
     markDirty(p.id); save(); toast('Changes saved.'); resetForm(); renderStatus(); showTab('list');
   }
   function deletePerson() {
@@ -238,7 +250,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   }
   function editPerson(id) {
     var p = S.people[id]; if (!p) return;
-    F = { id: id, ints: p.ints.slice() };
+    F = { id: id, ints: p.ints.slice(), rating: p.rating || '' };
     $('f-first').value = p.first; $('f-last').value = p.last; $('f-how').value = p.how; $('f-nat').value = p.nat; $('f-notes').value = p.notes || '';
     $('form-title').textContent = 'Edit person';
     $('add-actions').hidden = true; $('edit-actions').hidden = false;
@@ -258,7 +270,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       return true;
     }).sort(function (a, b) { return b.updated - a.updated; });
     var html = rows.slice(0, shown).map(function (p) {
-      var sub = [p.nat, p.how, p.ints.join(', ')].filter(Boolean).join(' · ');
+      var sub = [p.rating ? 'Rating ' + p.rating : '', p.nat, p.how, p.ints.join(', ')].filter(Boolean).join(' · ');
       return '<div class="item" data-id="' + esc(p.id) + '"><b>' + esc(fullName(p)) + '</b>' + (S.dirty.indexOf(p.id) > -1 ? ' <span class="hint">(not synced)</span>' : '') + '<div class="sub">' + esc(sub) + '</div>' + (p.notes ? '<div class="sub">' + esc(p.notes.replace(/\s+/g, ' ').slice(0, 90)) + (p.notes.length > 90 ? '…' : '') + '</div>' : '') + '</div>';
     }).join('');
     if (rows.length > shown) html += '<button id="more" style="width:100%">Show more (' + (rows.length - shown) + ')</button>';
@@ -269,9 +281,9 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     sel.innerHTML = '<option value="">' + first + '</option>' + opts.map(function (o) { return '<option' + (o === cur ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('');
   }
 
-  function bars(el, data, max) {
+  function bars(el, data, max, scale) {
     if (!data.length) { el.innerHTML = '<span class="hint" style="grid-column:1/-1">No data yet.</span>'; return; }
-    var m = Math.max.apply(null, data.map(function (d) { return d[1]; }));
+    var m = scale || Math.max.apply(null, data.map(function (d) { return d[1]; }));
     el.innerHTML = data.slice(0, max).map(function (d) {
       return '<span>' + esc(d[0]) + '</span><div class="b" style="width:' + Math.max(4, Math.round(d[1] / m * 100)) + '%"></div><span class="v">' + d[1] + '</span>';
     }).join('');
@@ -286,6 +298,16 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     var top = L.filter(function (p) { return p.ints.length; }).map(function (p) { return [fullName(p), p.ints.length]; })
       .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 5);
     bars($('s-top'), top, 5);
+    var R = L.filter(function (p) { return p.rating; });
+    var avg = function (a) { return Math.round(a.reduce(function (x, y) { return x + y; }, 0) / a.length * 10) / 10; };
+    $('s-rate').textContent = R.length ? avg(R.map(function (p) { return p.rating; })) : '–';
+    var dist = [];
+    for (var i = 10; i >= 1; i--) { var c = R.filter(function (p) { return p.rating === i; }).length; if (c) dist.push([String(i), c]); }
+    bars($('s-rate-bars'), dist, 10);
+    var byNat = {};
+    R.forEach(function (p) { if (p.nat) (byNat[p.nat] = byNat[p.nat] || []).push(p.rating); });
+    var avgNat = Object.keys(byNat).map(function (k) { return [k + ' (' + byNat[k].length + ')', avg(byNat[k])]; }).sort(function (a, b) { return b[1] - a[1]; });
+    bars($('s-rate-nat'), avgNat, 8, 10);
   }
 
   function showTab(t) {
@@ -298,10 +320,11 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   }
 
   function toServer(p) {
-    return { id: p.id, first_name: p.first, last_name: p.last, nationality: p.nat, how_we_know: p.how, interactions: p.ints.join(', '), notes: p.notes || '', created_at: p.created, updated_at: p.updated, deleted: !!p.deleted };
+    return { id: p.id, first_name: p.first, last_name: p.last, nationality: p.nat, how_we_know: p.how, interactions: p.ints.join(', '), notes: p.notes || '', rating: p.rating || '', created_at: p.created, updated_at: p.updated, deleted: !!p.deleted };
   }
+  function parseRating(v) { var n = Math.round(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.'))); return n >= 1 && n <= 10 ? n : ''; }
   function fromServer(r) {
-    return { id: String(r.id), first: r.first_name || '', last: r.last_name || '', nat: r.nationality || '', how: r.how_we_know || '', notes: r.notes || '',
+    return { id: String(r.id), first: r.first_name || '', last: r.last_name || '', nat: r.nationality || '', how: r.how_we_know || '', notes: r.notes || '', rating: parseRating(r.rating),
       ints: String(r.interactions || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean),
       created: Number(r.created_at) || 0, updated: Number(r.updated_at) || 0, deleted: false };
   }
@@ -330,11 +353,19 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       .then(function () { clearTimeout(to); syncing = false; btn.disabled = false; btn.firstChild.textContent = 'Sync'; renderStatus(); renderForm(); if ($('tab-list').classList.contains('on')) renderList(); if ($('tab-stats').classList.contains('on')) renderStats(); });
   }
 
-  function openSettings() { $('set-url').value = S.settings.url; $('set-key').value = S.settings.key; $('dlg').showModal(); }
+  var VERSION = 'App version 4 (notes and rating)';
+  function openSettings() { $('set-url').value = S.settings.url; $('set-key').value = S.settings.key; $('ver').textContent = VERSION + '. Refresh app loads the latest files and keeps your data.'; $('dlg').showModal(); }
+  function refreshApp() {
+    if (navigator.onLine === false) { toast('Refreshing needs signal.'); return; }
+    var jobs = [];
+    if (navigator.serviceWorker) jobs.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); }));
+    if (window.caches) jobs.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); }));
+    Promise.all(jobs).then(function () { location.reload(); });
+  }
   function csv() {
-    var head = ['first_name', 'last_name', 'nationality', 'how_we_know', 'interactions', 'notes'];
+    var head = ['first_name', 'last_name', 'nationality', 'how_we_know', 'interactions', 'notes', 'rating'];
     var q = function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; };
-    var lines = [head.join(',')].concat(live().map(function (p) { return [p.first, p.last, p.nat, p.how, p.ints.join('; '), p.notes || ''].map(q).join(','); }));
+    var lines = [head.join(',')].concat(live().map(function (p) { return [p.first, p.last, p.nat, p.how, p.ints.join('; '), p.notes || '', p.rating || ''].map(q).join(','); }));
     var a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
     a.download = 'people-' + new Date().toISOString().slice(0, 10) + '.csv';
@@ -346,6 +377,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     if (t.closest('nav button')) return showTab(t.closest('nav button').getAttribute('data-tab'));
     var ci = t.closest('[data-int]');
     if (ci) { var v = ci.getAttribute('data-int'), i = F.ints.indexOf(v); if (i > -1) F.ints.splice(i, 1); else F.ints.push(v); return renderForm(); }
+    var cr = t.closest('[data-rate]');
+    if (cr) { var rn = Number(cr.getAttribute('data-rate')); F.rating = F.rating === rn ? '' : rn; return renderForm(); }
     var cn = t.closest('[data-nat]');
     if (cn) { $('f-nat').value = cn.getAttribute('data-nat'); return renderForm(); }
     var it = t.closest('.item'); if (it) return editPerson(it.getAttribute('data-id'));
@@ -359,6 +392,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   $('btn-settings').onclick = openSettings;
   $('set-close').onclick = function () { $('dlg').close(); };
   $('set-export').onclick = csv;
+  $('set-refresh').onclick = refreshApp;
   $('set-save').onclick = function () {
     S.settings = { url: $('set-url').value.trim(), key: $('set-key').value.trim() }; save(); $('dlg').close(); toast('Settings saved.');
   };
