@@ -79,9 +79,9 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="lbl">Interactions</div>
     <div class="chips" id="int-chips"></div>
     <div class="hint" id="int-hint" hidden>No interaction options yet. Add them in the Config tab of your sheet, then tap Sync.</div>
-    <label for="f-nat">Nationality</label>
+    <label for="f-nat">Nationalities (tap all that apply)</label>
     <div class="chips" id="nat-chips" style="margin-bottom:8px"></div>
-    <input id="f-nat" list="nat-list" autocomplete="off" autocapitalize="words" placeholder="Type or tap above">
+    <div class="row"><input id="f-nat" list="nat-list" autocomplete="off" autocapitalize="words" placeholder="Another nationality"><button type="button" id="btn-nat-add" style="flex:0 0 auto">Add</button></div>
     <datalist id="nat-list"></datalist>
     <div class="lbl">Rating (1 to 10, tap again to clear)</div>
     <div class="rate" id="rate"></div>
@@ -115,6 +115,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       <div class="card"><div class="n" id="s-rate">–</div><div class="t">Average rating</div></div>
     </div>
     <h2>People by nationality</h2><div class="bars" id="s-nat-bars"></div>
+    <div class="hint" style="margin-top:6px">People with more than one nationality count in each.</div>
     <h2>People by interaction</h2><div class="bars" id="s-int-bars"></div>
     <h2>Most interactions</h2><div class="bars" id="s-top"></div>
     <h2>People by rating</h2><div class="bars" id="s-rate-bars"></div>
@@ -147,8 +148,9 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   'use strict';
   var KEY = 'pt_v1';
   var NATS = ['German','French','Spanish','Italian','British','American','Dutch','Belgian','Swiss','Austrian','Portuguese','Polish','Swedish','Norwegian','Danish','Finnish','Irish','Greek','Turkish','Romanian','Bulgarian','Czech','Hungarian','Croatian','Serbian','Ukrainian','Russian','Canadian','Mexican','Brazilian','Argentine','Colombian','Chilean','Peruvian','Indian','Pakistani','Chinese','Japanese','Korean','Vietnamese','Thai','Indonesian','Filipino','Australian','New Zealander','South African','Nigerian','Egyptian','Moroccan','Tunisian','Lebanese','Israeli','Iranian','Saudi','Emirati','Algerian','Kenyan','Ghanaian','Lithuanian','Latvian','Estonian','Slovak','Slovenian'];
-  var S = { people: {}, dirty: [], types: [], settings: { url: '', key: '' }, lastSync: 0 };
-  var F = { id: null, ints: [], rating: '' };
+  var S = { people: {}, dirty: [], types: [], settings: { url: '', key: '' }, lastSync: 0, scriptOutdated: false };
+  var MIN_API = 5;
+  var F = { id: null, ints: [], nats: [], rating: '' };
   var shown = 100;
 
   function $(id) { return document.getElementById(id); }
@@ -159,7 +161,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   function load() {
     try {
       var r = localStorage.getItem(KEY);
-      if (r) { var o = JSON.parse(r); S.people = o.people || {}; S.dirty = o.dirty || []; S.types = o.types || []; S.settings = o.settings || S.settings; S.lastSync = o.lastSync || 0; }
+      if (r) { var o = JSON.parse(r); S.people = o.people || {}; S.dirty = o.dirty || []; S.types = o.types || []; S.settings = o.settings || S.settings; S.lastSync = o.lastSync || 0; S.scriptOutdated = !!o.scriptOutdated; }
     } catch (e) {}
   }
   function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save on this device. Export a backup now.'); } }
@@ -172,6 +174,15 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     live().forEach(function (p) { p.ints.forEach(function (t) { if (!seen[t]) { seen[t] = 1; out.push(t); } }); });
     return out;
   }
+  function splitList(s) { return String(s || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean); }
+  function natList(p) { return splitList(p.nat); }
+  function commitNat() {
+    splitList($('f-nat').value).forEach(function (x) {
+      var c = canonNat(x), low = F.nats.map(function (n) { return n.toLowerCase(); });
+      if (c && low.indexOf(c.toLowerCase()) < 0) F.nats.push(c);
+    });
+    $('f-nat').value = '';
+  }
   function countBy(fn) {
     var m = {};
     live().forEach(function (p) { fn(p).forEach(function (k) { if (k) m[k] = (m[k] || 0) + 1; }); });
@@ -179,7 +190,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   }
   function canonNat(v) {
     v = v.trim(); if (!v) return '';
-    var known = countBy(function (p) { return [p.nat]; }).map(function (x) { return x[0]; }).concat(NATS);
+    var known = countBy(natList).map(function (x) { return x[0]; }).concat(NATS);
     for (var i = 0; i < known.length; i++) if (known[i].toLowerCase() === v.toLowerCase()) return known[i];
     return v.charAt(0).toUpperCase() + v.slice(1);
   }
@@ -190,6 +201,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     var ls = S.lastSync ? 'Last sync ' + new Date(S.lastSync).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'Not synced yet';
     $('status').textContent = (n ? n + ' waiting to sync. ' : 'Everything is synced. ') + ls;
     if (!n && !S.lastSync) $('status').textContent = 'Not synced yet. Entries are saved on this device.';
+    if (S.scriptOutdated) $('status').textContent = 'Google script out of date: update Code.gs and deploy a new version. ' + $('status').textContent;
   }
 
   function renderForm() {
@@ -198,13 +210,14 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     $('int-chips').innerHTML = types.map(function (t) {
       return '<button type="button" class="chip' + (F.ints.indexOf(t) > -1 ? ' on' : '') + '" data-int="' + esc(t) + '">' + esc(t) + '</button>';
     }).join('');
-    var top = countBy(function (p) { return [p.nat]; }).slice(0, 6);
-    var cur = $('f-nat').value.trim().toLowerCase();
-    $('nat-chips').innerHTML = top.map(function (x) {
-      return '<button type="button" class="chip' + (x[0].toLowerCase() === cur ? ' on' : '') + '" data-nat="' + esc(x[0]) + '">' + esc(x[0]) + '</button>';
+    var natCounts = countBy(natList), top = natCounts.slice(0, 6);
+    var shownNats = top.map(function (x) { return x[0]; });
+    F.nats.forEach(function (n) { if (shownNats.indexOf(n) < 0) shownNats.push(n); });
+    $('nat-chips').innerHTML = shownNats.map(function (n) {
+      return '<button type="button" class="chip' + (F.nats.indexOf(n) > -1 ? ' on' : '') + '" data-nat="' + esc(n) + '">' + esc(n) + '</button>';
     }).join('');
-    var names = {}; top.forEach(function (x) { names[x[0]] = 1; });
-    countBy(function (p) { return [p.nat]; }).forEach(function (x) { names[x[0]] = 1; });
+    var names = {}; shownNats.forEach(function (n) { names[n] = 1; });
+    natCounts.forEach(function (x) { names[x[0]] = 1; });
     NATS.forEach(function (n) { names[n] = 1; });
     $('nat-list').innerHTML = Object.keys(names).map(function (n) { return '<option value="' + esc(n) + '">'; }).join('');
     var rb = '';
@@ -213,7 +226,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   }
 
   function resetForm() {
-    F = { id: null, ints: [], rating: '' };
+    F = { id: null, ints: [], nats: [], rating: '' };
     ['f-first', 'f-last', 'f-how', 'f-nat', 'f-notes'].forEach(function (i) { $(i).value = ''; });
     $('f-err').textContent = '';
     $('form-title').textContent = 'Add person';
@@ -222,9 +235,10 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   }
 
   function readForm() {
+    commitNat();
     var first = $('f-first').value.trim(), last = $('f-last').value.trim();
     if (!first && !last) { $('f-err').textContent = 'Enter a first or last name'; $('f-first').focus(); return null; }
-    return { first: first, last: last, how: $('f-how').value.trim(), nat: canonNat($('f-nat').value), notes: $('f-notes').value.trim(), rating: F.rating, ints: F.ints.slice() };
+    return { first: first, last: last, how: $('f-how').value.trim(), nat: F.nats.join(', '), notes: $('f-notes').value.trim(), rating: F.rating, ints: F.ints.slice() };
   }
   function markDirty(id) { if (S.dirty.indexOf(id) < 0) S.dirty.push(id); }
 
@@ -250,8 +264,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   }
   function editPerson(id) {
     var p = S.people[id]; if (!p) return;
-    F = { id: id, ints: p.ints.slice(), rating: p.rating || '' };
-    $('f-first').value = p.first; $('f-last').value = p.last; $('f-how').value = p.how; $('f-nat').value = p.nat; $('f-notes').value = p.notes || '';
+    F = { id: id, ints: p.ints.slice(), nats: splitList(p.nat), rating: p.rating || '' };
+    $('f-first').value = p.first; $('f-last').value = p.last; $('f-how').value = p.how; $('f-nat').value = ''; $('f-notes').value = p.notes || '';
     $('form-title').textContent = 'Edit person';
     $('add-actions').hidden = true; $('edit-actions').hidden = false;
     renderForm(); showTab('add');
@@ -259,12 +273,12 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 
   function renderList() {
     var q = $('q').value.trim().toLowerCase(), fn = $('flt-nat').value, fi = $('flt-int').value;
-    var natOpts = countBy(function (p) { return [p.nat]; }).map(function (x) { return x[0]; });
+    var natOpts = countBy(natList).map(function (x) { return x[0]; });
     var intOpts = allTypes();
     fillSelect($('flt-nat'), natOpts, 'All nationalities', fn);
     fillSelect($('flt-int'), intOpts, 'All interactions', fi);
     var rows = live().filter(function (p) {
-      if (fn && p.nat !== fn) return false;
+      if (fn && natList(p).indexOf(fn) < 0) return false;
       if (fi && p.ints.indexOf(fi) < 0) return false;
       if (q && (fullName(p) + ' ' + p.how + ' ' + p.nat + ' ' + (p.notes || '')).toLowerCase().indexOf(q) < 0) return false;
       return true;
@@ -289,7 +303,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     }).join('');
   }
   function renderStats() {
-    var L = live(), nat = countBy(function (p) { return [p.nat]; });
+    var L = live(), nat = countBy(natList);
     $('s-people').textContent = L.length;
     $('s-nat').textContent = nat.length;
     $('s-int').textContent = L.reduce(function (a, p) { return a + p.ints.length; }, 0);
@@ -305,7 +319,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     for (var i = 10; i >= 1; i--) { var c = R.filter(function (p) { return p.rating === i; }).length; if (c) dist.push([String(i), c]); }
     bars($('s-rate-bars'), dist, 10);
     var byNat = {};
-    R.forEach(function (p) { if (p.nat) (byNat[p.nat] = byNat[p.nat] || []).push(p.rating); });
+    R.forEach(function (p) { natList(p).forEach(function (n) { (byNat[n] = byNat[n] || []).push(p.rating); }); });
     var avgNat = Object.keys(byNat).map(function (k) { return [k + ' (' + byNat[k].length + ')', avg(byNat[k])]; }).sort(function (a, b) { return b[1] - a[1]; });
     bars($('s-rate-nat'), avgNat, 8, 10);
   }
@@ -323,8 +337,11 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     return { id: p.id, first_name: p.first, last_name: p.last, nationality: p.nat, how_we_know: p.how, interactions: p.ints.join(', '), notes: p.notes || '', rating: p.rating || '', created_at: p.created, updated_at: p.updated, deleted: !!p.deleted };
   }
   function parseRating(v) { var n = Math.round(parseFloat(String(v === null || v === undefined ? '' : v).replace(',', '.'))); return n >= 1 && n <= 10 ? n : ''; }
-  function fromServer(r) {
-    return { id: String(r.id), first: r.first_name || '', last: r.last_name || '', nat: r.nationality || '', how: r.how_we_know || '', notes: r.notes || '', rating: parseRating(r.rating),
+  function fromServer(r, local) {
+    var has = function (k) { return Object.prototype.hasOwnProperty.call(r, k); };
+    return { id: String(r.id), first: r.first_name || '', last: r.last_name || '', nat: r.nationality || '', how: r.how_we_know || '',
+      notes: has('notes') ? (r.notes || '') : (local ? local.notes || '' : ''),
+      rating: has('rating') ? parseRating(r.rating) : (local ? local.rating || '' : ''),
       ints: String(r.interactions || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean),
       created: Number(r.created_at) || 0, updated: Number(r.updated_at) || 0, deleted: false };
   }
@@ -342,19 +359,25 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       .then(function (res) {
         if (!res || !res.ok) throw new Error(res && res.error === 'unauthorized' ? 'Wrong secret key.' : (res && res.error) || 'Unexpected reply.');
         var merged = {};
-        res.people.forEach(function (r) { var p = fromServer(r); merged[p.id] = p; });
-        var still = S.dirty.filter(function (id) { return !(id in sent) || (S.people[id] && S.people[id].updated !== sent[id]); });
+        var outdated = !(res.apiVersion >= MIN_API);
+        res.people.forEach(function (r) { var p = fromServer(r, S.people[String(r.id)]); merged[p.id] = p; });
+        var still = outdated ? S.dirty.slice() : S.dirty.filter(function (id) { return !(id in sent) || (S.people[id] && S.people[id].updated !== sent[id]); });
+        if (outdated) Object.keys(S.people).forEach(function (id) { var q = S.people[id]; if (!q.deleted && (q.rating || q.notes) && still.indexOf(id) < 0) still.push(id); });
         still.forEach(function (id) { if (S.people[id] && !S.people[id].deleted) merged[id] = S.people[id]; else if (S.people[id] && S.people[id].deleted) delete merged[id]; });
         S.people = merged; S.dirty = still.filter(function (id) { return !!S.people[id]; });
-        S.types = res.types || S.types; S.lastSync = Date.now(); save();
-        toast('Synced. ' + live().length + ' people.');
+        S.types = res.types || S.types; S.lastSync = Date.now(); S.scriptOutdated = outdated; save();
+        toast(outdated ? 'Synced, but your Google script is out of date, so ratings and notes are not reaching the sheet. Nothing is lost on this device.' : 'Synced. ' + live().length + ' people.');
       })
       .catch(function (e) { toast("Couldn't sync: " + (e.name === 'AbortError' ? 'timed out' : e.message) + ' Your entries are still saved here.'); })
       .then(function () { clearTimeout(to); syncing = false; btn.disabled = false; btn.firstChild.textContent = 'Sync'; renderStatus(); renderForm(); if ($('tab-list').classList.contains('on')) renderList(); if ($('tab-stats').classList.contains('on')) renderStats(); });
   }
 
-  var VERSION = 'App version 4 (notes and rating)';
-  function openSettings() { $('set-url').value = S.settings.url; $('set-key').value = S.settings.key; $('ver').textContent = VERSION + '. Refresh app loads the latest files and keeps your data.'; $('dlg').showModal(); }
+  var VERSION = 'App version 6 (script check)';
+  function openSettings() {
+    $('set-url').value = S.settings.url; $('set-key').value = S.settings.key;
+    $('ver').textContent = VERSION + '. Google script: ' + (!S.lastSync ? 'not checked yet' : S.scriptOutdated ? 'out of date' : 'up to date') + '. Refresh app loads the latest files and keeps your data.';
+    $('dlg').showModal();
+  }
   function refreshApp() {
     if (navigator.onLine === false) { toast('Refreshing needs signal.'); return; }
     var jobs = [];
@@ -380,7 +403,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     var cr = t.closest('[data-rate]');
     if (cr) { var rn = Number(cr.getAttribute('data-rate')); F.rating = F.rating === rn ? '' : rn; return renderForm(); }
     var cn = t.closest('[data-nat]');
-    if (cn) { $('f-nat').value = cn.getAttribute('data-nat'); return renderForm(); }
+    if (cn) { var nv = cn.getAttribute('data-nat'), ni = F.nats.indexOf(nv); if (ni > -1) F.nats.splice(ni, 1); else F.nats.push(nv); return renderForm(); }
     var it = t.closest('.item'); if (it) return editPerson(it.getAttribute('data-id'));
     if (t.id === 'more') { shown += 100; renderList(); }
   });
@@ -396,7 +419,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   $('set-save').onclick = function () {
     S.settings = { url: $('set-url').value.trim(), key: $('set-key').value.trim() }; save(); $('dlg').close(); toast('Settings saved.');
   };
-  $('f-nat').addEventListener('input', renderForm);
+  $('f-nat').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); commitNat(); renderForm(); } });
+  $('btn-nat-add').onclick = function () { commitNat(); renderForm(); $('f-nat').focus(); };
   $('f-first').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('f-last').focus(); } });
   $('f-last').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('f-how').focus(); } });
   $('f-how').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('btn-save').hidden || !$('edit-actions').hidden ? updatePerson() : addPerson(); } });

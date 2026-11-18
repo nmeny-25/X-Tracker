@@ -1,4 +1,4 @@
-var CACHE = 'people-v4';
+var CACHE = 'people-v6';
 var SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', function (e) {
